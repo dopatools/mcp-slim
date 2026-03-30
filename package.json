@@ -1,6 +1,6 @@
 {
   "name": "mcp-slim",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP proxy that reduces context window usage by 80-95%",
   "main": "dist/index.js",
   "bin": {

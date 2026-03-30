@@ -2,33 +2,31 @@
 
 **Your MCP servers eat 72% of your context window. Fix it in 60 seconds.**
 
-Connect 3 MCP servers and 55,000 tokens are gone before your first message. That's 27% of Claude's context window. On tool definitions you'll never use.
+Connect 3 MCP servers and 55,000 tokens vanish before your first message — burned on tool definitions you'll never use. Your model gets dumber, picks wrong tools, and hallucinates more. Not because it's bad, but because its working memory is full of tool brochures.
 
-MCP Slim sits between your client and your servers. Your AI sees 3 tools instead of 100+.
+MCP Slim is a proxy that sits between your client and your servers. Instead of dumping 100+ tool schemas upfront, it exposes 3 meta-tools. The LLM searches for what it needs, loads one schema at a time, and calls it. **One proxy, all your servers, zero config changes.**
 
-## How it works
+## The trick
 
 ```
 search_tools("create github issue")     →  5 matches, ~200 tokens
-get_tool_schema("github_create_issue")  →  just that one schema
+get_tool_schema("github_create_issue")  →  just that schema
 call_tool("github_create_issue", {...}) →  routed to the right backend
 ```
 
-That's it. Instead of loading every tool upfront, the LLM searches for what it needs, looks up the schema, and calls it. MCP Slim handles the routing.
+On a typical 3-tool task: **~20,000 tokens → ~700. That's 96%.**
+
+## Semantic search (the real feature)
+
+Most proxies just compress descriptions or filter by name. MCP Slim runs a local embedding model so the LLM can find tools by *intent*, not keywords:
 
 ```
-┌─────────────┐         ┌──────────────────────┐
-│  Claude /    │  stdio  │      MCP Slim        │
-│  Cursor /    │◀──────▶│                      │
-│  VS Code     │         │  search_tools        │
-└─────────────┘         │  get_tool_schema     │
-                         │  call_tool           │
-                         └───┬──────┬──────┬───┘
-                             │      │      │
-                          GitHub  Slack  Sentry  ...
+search_tools("save a note")  →  create_entities, add_observations
 ```
 
-Zero changes to your servers. Zero changes to your client.
+Zero keyword overlap. The model understood that "save a note" means "create an entity in the knowledge graph." Try that with a keyword filter.
+
+This matters because real users don't think in tool names. They think in tasks.
 
 ## Savings
 
@@ -38,20 +36,17 @@ Zero changes to your servers. Zero changes to your client.
 | Schema per lookup | 300 tokens | 180 tokens | **39%** |
 | API responses | 40,000 tokens | 5,000 tokens | **87%** |
 
-On a typical 3-tool task: **~20,000 tokens down to ~700. That's 96%+.**
-
 ## Install
 
 ```bash
 npx mcp-slim init
 ```
 
-Detects your existing Claude Desktop or Cursor config, backs it up, and rewrites it. Done.
+Detects your Claude Desktop, Cursor, Cline, Windsurf, or Zed config. Backs it up. Rewrites it. Done. No Docker, no Rust toolchain, no Python virtualenv.
 
-> **Note:** First run downloads a ~80MB embedding model. Search works immediately
-> via keyword matching; semantic search activates once the model loads (~2 seconds).
+> First run downloads a ~80MB embedding model. Keyword search works immediately; semantic search kicks in after ~2 seconds.
 
-### Or configure manually
+### Manual setup
 
 ```json
 // Your MCP client config
@@ -81,22 +76,22 @@ Detects your existing Claude Desktop or Cursor config, backs it up, and rewrites
 }
 ```
 
-## What it does under the hood
+## Under the hood
 
-- **Hybrid search** — keyword matching + local semantic embeddings (`@huggingface/transformers`). "Save a note" finds `create_memory_entity` even with zero keyword overlap.
-- **Schema compression** — strips redundant descriptions, type-default values, JSON Schema meta-fields.
-- **Response optimization** — truncates arrays, strips metadata keys by pattern, removes nulls.
-- **Usage tracking** — per-request token savings logged to stderr, session totals persisted to SQLite. Shows estimated cost savings on shutdown.
-- **Async model loading** — fuzzy search works instantly, embedding search kicks in once the model loads (~2 seconds).
-- **Graceful degradation** — if embeddings fail (offline, low memory), falls back to fuzzy. Never crashes the proxy.
+- **Hybrid search** — keyword + local semantic embeddings via `@huggingface/transformers`. No API keys, fully offline.
+- **Multi-server aggregation** — one proxy handles all your backends. Not one wrapper per server.
+- **Schema compression** — strips redundant descriptions, default values, JSON Schema meta-fields.
+- **Response optimization** — truncates arrays, strips metadata by pattern, removes nulls.
+- **Usage tracking** — per-request savings to stderr, session totals to SQLite.
+- **Graceful degradation** — if embeddings fail, falls back to keyword search. Never crashes.
 
 ## CLI
 
 ```bash
-mcp-slim proxy              # Start the proxy (run by MCP clients)
-mcp-slim proxy --verbose    # Debug logging to stderr
+mcp-slim proxy              # Start the proxy
+mcp-slim proxy --verbose    # With debug logging
 mcp-slim init               # Auto-configure from existing client config
-mcp-slim status             # Show backends, settings, all-time token savings
+mcp-slim status             # Backends, settings, all-time token savings
 ```
 
 ## Config
@@ -119,9 +114,17 @@ All optional. Defaults work out of the box.
 }
 ```
 
+## How is this different from X?
+
+**vs mcp-compressor (Atlassian)** — compressor wraps one server at a time and has no search. You need a separate instance per backend, and the LLM must already know the tool name. MCP Slim aggregates all servers, and the LLM finds tools by describing what it wants to do.
+
+**vs MCProxy** — MCProxy is a Rust binary with keyword search and middleware. MCP Slim adds semantic search, schema compression, response optimization, and installs with `npx` in one line.
+
+**vs Claude Code Tool Search** — built into Claude Code only. Doesn't work in Cursor, Cline, Windsurf, Zed, or any other client. MCP Slim works everywhere.
+
 ## Works with
 
-Any MCP client (Claude Desktop, Cursor, VS Code, custom agents) and any MCP server. stdio transport.
+Claude Desktop, Claude Code, Cursor, Cline, Roo Code, Windsurf, Continue.dev, Zed, JetBrains, VS Code — any MCP client that supports stdio transport.
 
 ## License
 

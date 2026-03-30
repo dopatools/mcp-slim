@@ -9,39 +9,142 @@ interface McpClientConfig {
   mcpServers?: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
 }
 
-function getCandidatePaths(): Array<{ path: string; label: string }> {
-  const candidates: Array<{ path: string; label: string }> = [];
+interface ClientCandidate {
+  path: string;
+  label: string;
+  /** Key in the JSON where mcpServers live. Default: "mcpServers" */
+  serversKey?: string;
+}
 
-  // Claude Desktop
+function getVSCodeExtensionPath(extensionId: string): string {
   if (process.platform === "darwin") {
-    candidates.push({
-      path: path.join(os.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json"),
-      label: "Claude Desktop (macOS)",
-    });
+    return path.join(os.homedir(), "Library", "Application Support", "Code", "User", "globalStorage", extensionId);
   } else if (process.platform === "win32") {
     const appdata = process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
+    return path.join(appdata, "Code", "User", "globalStorage", extensionId);
+  }
+  return path.join(os.homedir(), ".config", "Code", "User", "globalStorage", extensionId);
+}
+
+function getCandidatePaths(): ClientCandidate[] {
+  const candidates: ClientCandidate[] = [];
+  const home = os.homedir();
+
+  // --- Claude Desktop ---
+  if (process.platform === "darwin") {
+    candidates.push({
+      path: path.join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json"),
+      label: "Claude Desktop",
+    });
+  } else if (process.platform === "win32") {
+    const appdata = process.env.APPDATA ?? path.join(home, "AppData", "Roaming");
     candidates.push({
       path: path.join(appdata, "Claude", "claude_desktop_config.json"),
-      label: "Claude Desktop (Windows)",
+      label: "Claude Desktop",
     });
   } else {
-    // Linux
     candidates.push({
-      path: path.join(os.homedir(), ".config", "Claude", "claude_desktop_config.json"),
-      label: "Claude Desktop (Linux)",
+      path: path.join(home, ".config", "Claude", "claude_desktop_config.json"),
+      label: "Claude Desktop",
     });
   }
 
-  // Cursor
+  // --- Claude Code ---
   candidates.push({
-    path: path.join(os.homedir(), ".cursor", "mcp.json"),
+    path: path.join(home, ".claude", "settings.json"),
+    label: "Claude Code",
+  });
+
+  // --- Cursor ---
+  candidates.push({
+    path: path.join(home, ".cursor", "mcp.json"),
     label: "Cursor",
+  });
+
+  // --- Windsurf (Codeium) ---
+  if (process.platform === "win32") {
+    candidates.push({
+      path: path.join(home, ".codeium", "windsurf", "mcp_config.json"),
+      label: "Windsurf",
+    });
+  } else {
+    candidates.push({
+      path: path.join(home, ".codeium", "windsurf", "mcp_config.json"),
+      label: "Windsurf",
+    });
+  }
+
+  // --- Cline (VS Code extension) ---
+  candidates.push({
+    path: path.join(getVSCodeExtensionPath("saoudrizwan.claude-dev"), "settings", "cline_mcp_settings.json"),
+    label: "Cline",
+  });
+
+  // --- Roo Code (VS Code extension) ---
+  candidates.push({
+    path: path.join(getVSCodeExtensionPath("rooveterinaryinc.roo-cline"), "settings", "mcp_settings.json"),
+    label: "Roo Code",
+  });
+
+  // --- Zed ---
+  if (process.platform === "darwin") {
+    candidates.push({
+      path: path.join(home, ".config", "zed", "settings.json"),
+      label: "Zed",
+      serversKey: "context_servers",
+    });
+  } else if (process.platform !== "win32") {
+    candidates.push({
+      path: path.join(home, ".config", "zed", "settings.json"),
+      label: "Zed",
+      serversKey: "context_servers",
+    });
+  }
+
+  // --- JetBrains IDEs ---
+  // Config lives in ~/.config/JetBrains/<Product><Version>/mcp.json (Linux/Win)
+  // or ~/Library/Application Support/JetBrains/<Product><Version>/mcp.json (macOS)
+  const jetbrainsBase = process.platform === "darwin"
+    ? path.join(home, "Library", "Application Support", "JetBrains")
+    : process.platform === "win32"
+      ? path.join(home, "AppData", "Roaming", "JetBrains")
+      : path.join(home, ".config", "JetBrains");
+
+  if (fs.existsSync(jetbrainsBase)) {
+    try {
+      const entries = fs.readdirSync(jetbrainsBase, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const mcpJson = path.join(jetbrainsBase, entry.name, "mcp.json");
+          if (fs.existsSync(mcpJson)) {
+            candidates.push({
+              path: mcpJson,
+              label: `JetBrains (${entry.name})`,
+            });
+          }
+        }
+      }
+    } catch {
+      // JetBrains dir not readable, skip
+    }
+  }
+
+  // --- Junie (JetBrains agent) ---
+  candidates.push({
+    path: path.join(home, ".junie", "mcp.json"),
+    label: "Junie",
+  });
+
+  // --- Amazon Q ---
+  candidates.push({
+    path: path.join(home, ".aws", "amazonq", "mcp.json"),
+    label: "Amazon Q",
   });
 
   return candidates;
 }
 
-function findClientConfigs(): Array<{ path: string; label: string }> {
+function findClientConfigs(): ClientCandidate[] {
   return getCandidatePaths().filter((c) => fs.existsSync(c.path));
 }
 
@@ -51,11 +154,8 @@ export async function runInit(): Promise<void> {
   const found = findClientConfigs();
   if (found.length === 0) {
     console.log("No MCP client configurations found.");
-    console.log("Supported locations:");
-    const allCandidates = getCandidatePaths();
-    for (const c of allCandidates) {
-      console.log(`  - ${c.label}: ${c.path}`);
-    }
+    console.log("Supported clients: Claude Desktop, Claude Code, Cursor, Windsurf,");
+    console.log("  Cline, Roo Code, Zed, JetBrains IDEs, Junie, Amazon Q");
     console.log(`\nCreate a config manually at: ${getConfigPath()}`);
     return;
   }
@@ -66,8 +166,9 @@ export async function runInit(): Promise<void> {
     console.log(`  → ${clientConfig.label}: ${clientConfig.path}`);
     try {
       const raw = fs.readFileSync(clientConfig.path, "utf-8");
-      const parsed = JSON.parse(raw) as McpClientConfig;
-      const servers = parsed.mcpServers ?? {};
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const serversKey = clientConfig.serversKey ?? "mcpServers";
+      const servers = (parsed[serversKey] ?? {}) as Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
       const serverNames = Object.keys(servers);
 
       if (serverNames.length === 0) {
@@ -113,9 +214,9 @@ export async function runInit(): Promise<void> {
       console.log(`    MCP Slim config: ${getConfigPath()}`);
 
       // Rewrite client config to point to mcp-slim
-      const newClientConfig: McpClientConfig = {
+      const newClientConfig = {
         ...parsed,
-        mcpServers: {
+        [serversKey]: {
           "mcp-slim": {
             command: "npx",
             args: ["mcp-slim", "proxy"],
